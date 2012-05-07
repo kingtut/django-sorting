@@ -1,23 +1,25 @@
-from operator import attrgetter
-
 from django import template
 from django.conf import settings
-from django.db.models import fields as django_fields
 from django.http import Http404
 from django.utils.translation import ugettext as _
+
+from django_sorting import queryset_sort
 
 register = template.Library()
 
 DEFAULT_SORT_UP = getattr(settings, 'DEFAULT_SORT_UP' , '&uarr;')
 DEFAULT_SORT_DOWN = getattr(settings, 'DEFAULT_SORT_DOWN' , '&darr;')
 INVALID_FIELD_RAISES_404 = getattr(settings,
-        'SORTING_INVALID_FIELD_RAISES_404' , False)
+        'SORTING_INVALID_FIELD_RAISES_404' , True)
 
 sort_directions = {
     'asc': {'icon':DEFAULT_SORT_UP, 'inverse': 'desc'},
     'desc': {'icon':DEFAULT_SORT_DOWN, 'inverse': 'asc'},
     '': {'icon':DEFAULT_SORT_DOWN, 'inverse': 'asc'},
 }
+
+MESSAGE_404 = """Invalid field sorting. If DEBUG were set to 
+                 False, an HTTP 404 page would have been shown instead."""
 
 def anchor(parser, token):
     """
@@ -137,38 +139,20 @@ class SortedDataNode(template.Node):
 
         queryset = self.queryset_var.resolve(context)
         order_by = context['request'].fields
+        
+        if not order_by:
+            context[key] = queryset
+            return u''
 
-        if len(order_by) > 1:
-            # The field name can be prefixed by the minus sign and we need to
-            # extract this information if we want to sort on simple object
-            # attributes (non-model fields)
-            if order_by[0] == '-':
-                reverse = True
-                name = order_by[1:]
-            else:
-                reverse = False
-                name = order_by
-
-            # Is it an instance attribute? (no foo__bar syntax here).
-            attribute = getattr(queryset.model, name, None)
-            if isinstance(attribute, django_fields.Field):
-                # It's a model field so a classical order_by can be used
-                attribute = None
-
-            try:
-                if attribute:
-                    context[key] = sorted(queryset, key=attrgetter(name), reverse=reverse)
-                else:
-                    context[key] = queryset.order_by(order_by)
-            except template.TemplateSyntaxError:
-                if INVALID_FIELD_RAISES_404:
-                    raise Http404(
-                        'Invalid field sorting. If DEBUG were set to '
-                        'False, an HTTP 404 page would have been shown instead.')
-                context[key] = queryset
-        else:
+        try:
+            queryset = queryset_sort(queryset, order_by)
+        except AttributeError:
+            if INVALID_FIELD_RAISES_404:
+                raise Http404(MESSAGE_404)
             context[key] = queryset
 
+            
+        context[key] = queryset
         return u''
 
 
